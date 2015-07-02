@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-from svm import *
+from hintsvm import *
 
 def svm_read_problem(data_file_name):
 	"""
