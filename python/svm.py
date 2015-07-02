@@ -5,21 +5,28 @@ from ctypes.util import find_library
 import sys
 import os
 
+#modify by Macaca 2013/10/9
 # For unix the prefix 'lib' is not considered.
-if find_library('svm'):
-	libsvm = CDLL(find_library('svm'))
-elif find_library('libsvm'):
-	libsvm = CDLL(find_library('libsvm'))
-else:
-	if sys.platform == 'win32':
-		libsvm = CDLL(os.path.join(os.path.dirname(__file__),\
-				'../windows/libsvm.dll'))
-	else:
-		libsvm = CDLL(os.path.join(os.path.dirname(__file__),\
-				'../libsvm.so.2'))
+#if find_library('svm'):
+#	libsvm = CDLL(find_library('svm'))
+#elif find_library('libsvm'):
+#	libsvm = CDLL(find_library('libsvm'))
+#else:
+#	if sys.platform == 'win32':
+#		libsvm = CDLL(os.path.join(os.path.dirname(__file__),\
+#				'../windows/libsvm.dll'))
+#	else:
+#		libsvm = CDLL(os.path.join(os.path.dirname(__file__),\
+#				'../libsvm.so.2'))
+
+#copy svm.py and svmutil.py to the working directory and change the following path
+libsvm = CDLL( './libsvm/libsvm.so.2' )
+#modify by Macaca 2013/10/9
 
 # Construct constants
-SVM_TYPE = ['C_SVC', 'NU_SVC', 'ONE_CLASS', 'EPSILON_SVR', 'NU_SVR' ]
+#modify by Macaca 2013/10/9
+SVM_TYPE = ['C_SVC', 'NU_SVC', 'ONE_CLASS', 'EPSILON_SVR', 'NU_SVR', 'HINT_SVC' ]
+#modify by Macaca 2013/10/9
 KERNEL_TYPE = ['LINEAR', 'POLY', 'RBF', 'SIGMOID', 'PRECOMPUTED']
 for i, s in enumerate(SVM_TYPE): exec("%s = %d" % (s , i))
 for i, s in enumerate(KERNEL_TYPE): exec("%s = %d" % (s , i))
@@ -66,14 +73,18 @@ def gen_svm_nodearray(xi, feature_max=None, issparse=None):
 	return ret, max_idx
 
 class svm_problem(Structure):
-	_names = ["l", "y", "x"]
-	_types = [c_int, POINTER(c_double), POINTER(POINTER(svm_node))]
+	_names = ["l", "y", "x", "W"]
+	_types = [c_int, POINTER(c_double), POINTER(POINTER(svm_node)), POINTER(c_double)]
 	_fields_ = genFields(_names, _types)
 
-	def __init__(self, y, x):
+	def __init__(self, W, y, x):
 		if len(y) != len(x):
 			raise ValueError("len(y) != len(x)")
+		if len(W) != 0 and len(W) != len(x):
+			raise ValueError("len(W) != len(x)")
 		self.l = l = len(y)
+		if len(W) == 0:
+			W = [1] * l
 
 		max_idx = 0
 		x_space = self.x_space = []
@@ -82,6 +93,9 @@ class svm_problem(Structure):
 			x_space += [tmp_xi]
 			max_idx = max(max_idx, tmp_idx)
 		self.n = max_idx
+
+		self.W = (c_double * l)()
+		for i, Wi in enumerate(W): self.W[i] = Wi
 
 		self.y = (c_double * l)()
 		for i, yi in enumerate(y): self.y[i] = yi

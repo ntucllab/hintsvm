@@ -397,13 +397,12 @@ public:
 	struct SolutionInfo {
 		double obj;
 		double rho;
-		double upper_bound_p;
-		double upper_bound_n;
+		double *upper_bound;
 		double r;	// for Solver_NU
 	};
 
 	void Solve(int l, const QMatrix& Q, const double *p_, const schar *y_,
-		   double *alpha_, double Cp, double Cn, double eps,
+		   double *alpha_, const double* C_, double eps,
 		   SolutionInfo* si, int shrinking);
 protected:
 	int active_size;
@@ -416,6 +415,7 @@ protected:
 	const double *QD;
 	double eps;
 	double Cp,Cn;
+	double *C;
 	double *p;
 	int *active_set;
 	double *G_bar;		// gradient, if we treat free variables as 0
@@ -424,7 +424,7 @@ protected:
 
 	double get_C(int i)
 	{
-		return (y[i] > 0)? Cp : Cn;
+		return C[i];
 	}
 	void update_alpha_status(int i)
 	{
@@ -456,6 +456,7 @@ void Solver::swap_index(int i, int j)
 	swap(p[i],p[j]);
 	swap(active_set[i],active_set[j]);
 	swap(G_bar[i],G_bar[j]);
+	swap(C[i],C[j]);
 }
 
 void Solver::reconstruct_gradient()
@@ -501,7 +502,7 @@ void Solver::reconstruct_gradient()
 }
 
 void Solver::Solve(int l, const QMatrix& Q, const double *p_, const schar *y_,
-		   double *alpha_, double Cp, double Cn, double eps,
+		   double *alpha_, const double* C_, double eps,
 		   SolutionInfo* si, int shrinking)
 {
 	this->l = l;
@@ -510,8 +511,7 @@ void Solver::Solve(int l, const QMatrix& Q, const double *p_, const schar *y_,
 	clone(p, p_,l);
 	clone(y, y_,l);
 	clone(alpha,alpha_,l);
-	this->Cp = Cp;
-	this->Cn = Cn;
+	clone(C,C_,l);
 	this->eps = eps;
 	unshrink = false;
 
@@ -767,13 +767,14 @@ void Solver::Solve(int l, const QMatrix& Q, const double *p_, const schar *y_,
 				// or Q.swap_index(i,active_set[i]);
 	}*/
 
-	si->upper_bound_p = Cp;
-	si->upper_bound_n = Cn;
+	for(int i=0;i<l;i++)
+		si->upper_bound[i] = C[i];
 
 	info("\noptimization finished, #iter = %d\n",iter);
 
 	delete[] p;
 	delete[] y;
+	delete[] C;
 	delete[] alpha;
 	delete[] alpha_status;
 	delete[] active_set;
@@ -1010,11 +1011,11 @@ class Solver_NU : public Solver
 public:
 	Solver_NU() {}
 	void Solve(int l, const QMatrix& Q, const double *p, const schar *y,
-		   double *alpha, double Cp, double Cn, double eps,
+		   double *alpha, double* C_, double eps,
 		   SolutionInfo* si, int shrinking)
 	{
 		this->si = si;
-		Solver::Solve(l,Q,p,y,alpha,Cp,Cn,eps,si,shrinking);
+		Solver::Solve(l,Q,p,y,alpha,C_,eps,si,shrinking);
 	}
 private:
 	SolutionInfo *si;
@@ -1433,6 +1434,123 @@ private:
 	double *QD;
 };
 
+
+/*added by Macaca referenced from ferng 20111222*/
+class HINT_SVC_Q : public Kernel
+{
+public:
+	HINT_SVC_Q(const svm_problem& prob, const svm_parameter& param, const schar *y_)
+		:Kernel(prob.l, prob.x, param)
+	{
+		l = prob.l;
+		nHint = 0;
+		for(int k = 0; k < l; ++k)
+			if(y_[k] == 0) ++nHint;
+		sign = new schar[l+nHint];
+		index = new int[l+nHint];
+		QD = new double[l+nHint];
+		cache = new Cache(l, (long int)(param.cache_size*(1<<20)));
+		isHint = new schar[l+nHint];
+		Y =  new schar[l+nHint] ;
+		
+		this->C = param.C ;
+		W = prob.W ;
+		loss_type = param.degree ;
+		for(int k = 0, j = 0; k < l; ++k)
+		{
+			index[k] = k;
+			Y[k] = y_[k] ;
+			QD[k] = (this->*kernel_function)(k,k);
+			if(y_[k] != 0)
+			{
+				isHint[k] = 0;
+				sign[k] = y_[k];
+			}
+			/*Modified by Macaca 20120120*/
+			else
+			{
+				isHint[k] = 1;
+				sign[k] = 1;
+				index[l+j] = k;
+				if( loss_type == 2 )
+					QD[k] += 0.5/( C*W[k] ) ;
+				QD[l+j] = QD[k];
+				Y[l+j] = Y[k] ;
+				isHint[l+j] = 1;
+				sign[l+j] = -1;
+				++j;
+			}
+			/*Modified by Macaca 20120120*/
+		}
+		buffer[0] = new Qfloat[l+nHint];
+		buffer[1] = new Qfloat[l+nHint];
+		next_buffer = 0;
+	}
+	Qfloat *get_Q(int i, int len) const
+	{
+		Qfloat *data;
+		int real_i = index[i];
+		if((cache->get_data(real_i,&data,l) )< l)
+		{
+			for(int j = 0; j < l; ++j)
+				data[j] = (Qfloat)(this->*kernel_function)(real_i,j);
+		}
+
+		// reorder and copy
+		Qfloat *buf = buffer[next_buffer];
+		next_buffer = 1 - next_buffer;
+		schar si = sign[i];
+		for(int j=0;j<len;j++)
+		{
+			buf[j] = (Qfloat) si * (Qfloat) sign[j] * data[index[j]];
+			//if(isHint[i] != isHint[j])
+			//	buf[j] *= 2;
+		}
+		/*Modified by Macaca 20120120*/
+		if( loss_type == 2 && Y[i] == 0 )
+			buf[i] += 0.5/(C*W[ real_i ] ) ;
+		/*Modified by Macaca 20120120*/
+		return buf;
+	}
+	double *get_QD() const
+	{
+		return QD;
+	}
+	void swap_index(int i, int j) const
+	{
+		swap(isHint[i], isHint[j]);
+		swap(sign[i],sign[j]);
+		swap(index[i],index[j]);
+		swap(QD[i],QD[j]);
+	}
+	~HINT_SVC_Q()
+	{
+		delete[] isHint;
+		delete cache;
+		delete[] sign;
+		delete[] index;
+		delete[] buffer[0];
+		delete[] buffer[1];
+		delete[] QD;
+		delete[] Y ;
+	}
+private:
+	int l;
+	int nHint;
+	Cache *cache;
+	schar *isHint;
+	double *QD;
+	schar *sign;
+	int *index;
+	mutable int next_buffer;
+	Qfloat *buffer[2];
+	double *W ;
+	double C ;
+	int loss_type ;
+	schar *Y ;
+};
+/*added by Macaca referenced from ferng 20111222*/
+
 //
 // construct and solve various formulations
 //
@@ -1443,6 +1561,7 @@ static void solve_c_svc(
 	int l = prob->l;
 	double *minus_ones = new double[l];
 	schar *y = new schar[l];
+	double *C = new double[l];
 
 	int i;
 
@@ -1450,23 +1569,34 @@ static void solve_c_svc(
 	{
 		alpha[i] = 0;
 		minus_ones[i] = -1;
-		if(prob->y[i] > 0) y[i] = +1; else y[i] = -1;
+		if(prob->y[i] > 0)
+		{
+			y[i] = +1;
+			C[i] = prob->W[i]*Cp;
+		}
+		else
+		{
+			y[i] = -1;
+			C[i] = prob->W[i]*Cn;
+		}
 	}
 
 	Solver s;
 	s.Solve(l, SVC_Q(*prob,*param,y), minus_ones, y,
-		alpha, Cp, Cn, param->eps, si, param->shrinking);
+		alpha, C, param->eps, si, param->shrinking);
 
+	/*
 	double sum_alpha=0;
 	for(i=0;i<l;i++)
 		sum_alpha += alpha[i];
-
 	if (Cp==Cn)
 		info("nu = %f\n", sum_alpha/(Cp*prob->l));
+	*/
 
 	for(i=0;i<l;i++)
 		alpha[i] *= y[i];
 
+	delete[] C;
 	delete[] minus_ones;
 	delete[] y;
 }
@@ -1480,25 +1610,31 @@ static void solve_nu_svc(
 	double nu = param->nu;
 
 	schar *y = new schar[l];
+	double *C = new double[l];
 
 	for(i=0;i<l;i++)
+	{
 		if(prob->y[i]>0)
 			y[i] = +1;
 		else
 			y[i] = -1;
-
-	double sum_pos = nu*l/2;
-	double sum_neg = nu*l/2;
+		C[i] = prob->W[i];
+	}
+	
+	double nu_l = 0;
+	for(i=0;i<l;i++) nu_l += nu*C[i];
+	double sum_pos = nu_l/2;
+	double sum_neg = nu_l/2;
 
 	for(i=0;i<l;i++)
 		if(y[i] == +1)
 		{
-			alpha[i] = min(1.0,sum_pos);
+			alpha[i] = min(C[i],sum_pos);
 			sum_pos -= alpha[i];
 		}
 		else
 		{
-			alpha[i] = min(1.0,sum_neg);
+			alpha[i] = min(C[i],sum_neg);
 			sum_neg -= alpha[i];
 		}
 
@@ -1509,19 +1645,21 @@ static void solve_nu_svc(
 
 	Solver_NU s;
 	s.Solve(l, SVC_Q(*prob,*param,y), zeros, y,
-		alpha, 1.0, 1.0, param->eps, si,  param->shrinking);
+		alpha, C, param->eps, si,  param->shrinking);
 	double r = si->r;
 
 	info("C = %f\n",1/r);
 
 	for(i=0;i<l;i++)
+	{
 		alpha[i] *= y[i]/r;
+		si->upper_bound[i] /= r;
+	}
 
 	si->rho /= r;
 	si->obj /= (r*r);
-	si->upper_bound_p = 1/r;
-	si->upper_bound_n = 1/r;
 
+	delete[] C;
 	delete[] y;
 	delete[] zeros;
 }
@@ -1533,15 +1671,25 @@ static void solve_one_class(
 	int l = prob->l;
 	double *zeros = new double[l];
 	schar *ones = new schar[l];
+	double *C = new double[l];
 	int i;
 
-	int n = (int)(param->nu*prob->l);	// # of alpha's at upper bound
+	double nu_l = 0;
 
-	for(i=0;i<n;i++)
-		alpha[i] = 1;
-	if(n<prob->l)
-		alpha[n] = param->nu * prob->l - n;
-	for(i=n+1;i<l;i++)
+	for(i=0;i<l;i++)
+	{
+		C[i] = prob->W[i];
+		nu_l += C[i] * param->nu;
+	}
+
+	i = 0;
+	while(nu_l > 0)
+	{
+		alpha[i] = min(C[i],nu_l);
+		nu_l -= alpha[i];
+		++i;
+	}
+	for(;i<l;i++)
 		alpha[i] = 0;
 
 	for(i=0;i<l;i++)
@@ -1552,8 +1700,9 @@ static void solve_one_class(
 
 	Solver s;
 	s.Solve(l, ONE_CLASS_Q(*prob,*param), zeros, ones,
-		alpha, 1.0, 1.0, param->eps, si, param->shrinking);
+		alpha, C, param->eps, si, param->shrinking);
 
+	delete[] C;
 	delete[] zeros;
 	delete[] ones;
 }
@@ -1565,6 +1714,7 @@ static void solve_epsilon_svr(
 	int l = prob->l;
 	double *alpha2 = new double[2*l];
 	double *linear_term = new double[2*l];
+	double *C = new double[2*l];
 	schar *y = new schar[2*l];
 	int i;
 
@@ -1573,26 +1723,27 @@ static void solve_epsilon_svr(
 		alpha2[i] = 0;
 		linear_term[i] = param->p - prob->y[i];
 		y[i] = 1;
+		C[i] = prob->W[i]*param->C;
 
 		alpha2[i+l] = 0;
 		linear_term[i+l] = param->p + prob->y[i];
 		y[i+l] = -1;
+		C[i+l] = prob->W[i]*param->C;
 	}
 
 	Solver s;
 	s.Solve(2*l, SVR_Q(*prob,*param), linear_term, y,
-		alpha2, param->C, param->C, param->eps, si, param->shrinking);
-
+		alpha2, C, param->eps, si, param->shrinking);
 	double sum_alpha = 0;
 	for(i=0;i<l;i++)
 	{
 		alpha[i] = alpha2[i] - alpha2[i+l];
 		sum_alpha += fabs(alpha[i]);
 	}
-	info("nu = %f\n",sum_alpha/(param->C*l));
-
+	//info("nu = %f\n",sum_alpha/(param->C*l));
 	delete[] alpha2;
 	delete[] linear_term;
+	delete[] C;
 	delete[] y;
 }
 
@@ -1601,16 +1752,23 @@ static void solve_nu_svr(
 	double *alpha, Solver::SolutionInfo* si)
 {
 	int l = prob->l;
-	double C = param->C;
+	double *C = new double[2*l];
 	double *alpha2 = new double[2*l];
 	double *linear_term = new double[2*l];
 	schar *y = new schar[2*l];
 	int i;
 
-	double sum = C * param->nu * l / 2;
+	double sum = 0;
 	for(i=0;i<l;i++)
 	{
-		alpha2[i] = alpha2[i+l] = min(sum,C);
+		C[i] = C[i+l] = prob->W[i]*param->C;
+		sum += C[i] * param->nu;
+	}
+	sum /= 2;
+
+	for(i=0;i<l;i++)
+	{
+		alpha2[i] = alpha2[i+l] = min(sum,C[i]);
 		sum -= alpha2[i];
 
 		linear_term[i] = - prob->y[i];
@@ -1622,7 +1780,7 @@ static void solve_nu_svr(
 
 	Solver_NU s;
 	s.Solve(2*l, SVR_Q(*prob,*param), linear_term, y,
-		alpha2, C, C, param->eps, si, param->shrinking);
+		alpha2, C, param->eps, si, param->shrinking);
 
 	info("epsilon = %f\n",-si->r);
 
@@ -1631,8 +1789,99 @@ static void solve_nu_svr(
 
 	delete[] alpha2;
 	delete[] linear_term;
+	delete[] C;
 	delete[] y;
 }
+
+/*added by Macaca referenced from ferng 20111222*/
+static void solve_hint_svc(
+	const svm_problem *prob, const svm_parameter *param,
+	double *alpha, Solver::SolutionInfo* si)
+{
+	int l = prob->l;
+	int nHint = 0;
+	schar *y1 = new schar[l];
+	int k, j;
+	for(k = 0; k < l; ++k)
+	{
+		if(-1 < prob->y[k] && prob->y[k] < 1) ++nHint, y1[k] = 0;
+		else if(prob->y[k] > 0) y1[k] = +1;
+		else y1[k] = -1;
+	}
+
+	double *alpha2 = new double[l+nHint];
+	double *linear_term = new double[l+nHint];
+	double *C2 = new double[l+nHint] ;
+	schar *y2 = new schar[l+nHint];
+	si->upper_bound = Malloc(double,prob->l+nHint); 
+	for(k = 0, j = 0; k < l; ++k)
+	{
+		if(y1[k] != 0)
+		{
+			alpha2[k] = 0;
+			linear_term[k] = -1;
+			y2[k] = y1[k];
+			C2[k] = prob->W[k]*param->C;
+			
+		}
+		/*Modified by Macaca 20120120*/
+		else
+		{
+			alpha2[k] = 0;
+			linear_term[k] = param->p - prob->y[k];
+			y2[k] = 1;
+			if( param->degree == 1 )
+				C2[k] = prob->W[k]*param->C ;
+			else
+				C2[k] = INF ;
+			alpha2[l+j] = 0;
+			linear_term[l+j] = param->p + prob->y[k];
+			y2[l+j] = -1;
+			if( param->degree == 1 )
+				C2[l+j] = C2[k] ;
+			else
+				C2[l+j] = INF ;
+			++j;
+		}
+		/*Modified by Macaca 20120120*/
+	}
+
+	Solver s;
+	s.Solve(l+nHint, HINT_SVC_Q(*prob, *param, y1), linear_term, y2,
+		alpha2, C2, param->eps, si, param->shrinking);
+
+	double sum_alpha = 0;
+	for(k = 0, j = 0; k < l; ++k)
+	{
+		if(y1[k] != 0)
+		{
+			sum_alpha += alpha2[k];
+			alpha[k] = alpha2[k] * y1[k];
+		}
+		else
+		{
+			alpha[k] = alpha2[k] - alpha2[l+j];
+			sum_alpha += fabs(alpha[k]);
+			++j;
+		}
+	}
+	//for(k = 0; k < l+j; ++k)
+	//	fprintf(stderr, "%lg ", alpha2[k]);
+	//fprintf(stderr, "\n");
+	// DEBUG
+/*	double w[2] = {0.0, 0.0};
+	for(int i = 0; i < l; ++i)
+		w[0] += alpha[i] * prob->x[i][0].value, w[1] += alpha[i] * prob->x[i][1].value;
+	fprintf(stderr, "w = (%lg, %lg)\n", w[0], w[1]);*/
+	
+	info("nu = %f\n", sum_alpha/(param->C*l));
+	delete[] alpha2;
+	delete[] linear_term;
+	delete[] y1;
+	delete[] y2;
+	delete[] C2 ;
+}
+/*added by Macaca referenced from ferng 20111222*/
 
 //
 // decision_function
@@ -1652,20 +1901,32 @@ static decision_function svm_train_one(
 	switch(param->svm_type)
 	{
 		case C_SVC:
+			si.upper_bound = Malloc(double,prob->l); 
 			solve_c_svc(prob,param,alpha,&si,Cp,Cn);
 			break;
 		case NU_SVC:
+			si.upper_bound = Malloc(double,prob->l); 
 			solve_nu_svc(prob,param,alpha,&si);
 			break;
 		case ONE_CLASS:
+			si.upper_bound = Malloc(double,prob->l); 
 			solve_one_class(prob,param,alpha,&si);
 			break;
 		case EPSILON_SVR:
+			si.upper_bound = Malloc(double,2*prob->l); 
 			solve_epsilon_svr(prob,param,alpha,&si);
 			break;
 		case NU_SVR:
+			si.upper_bound = Malloc(double,2*prob->l); 
 			solve_nu_svr(prob,param,alpha,&si);
 			break;
+		/*added by Macaca referenced from ferng 20111222*/
+		case HINT_SVC:
+			/***put 1 to reduce the complexity***/
+			/***reallocate new si2 in solve_hint_svc***/
+			solve_hint_svc(prob, param, alpha, &si);
+			break;
+		/*added by Macaca referenced from ferng 20111222*/
 	}
 
 	info("obj = %f, rho = %f\n",si.obj,si.rho);
@@ -1681,16 +1942,18 @@ static decision_function svm_train_one(
 			++nSV;
 			if(prob->y[i] > 0)
 			{
-				if(fabs(alpha[i]) >= si.upper_bound_p)
+				if(fabs(alpha[i]) >= si.upper_bound[i])
 					++nBSV;
 			}
 			else
 			{
-				if(fabs(alpha[i]) >= si.upper_bound_n)
+				if(fabs(alpha[i]) >= si.upper_bound[i])
 					++nBSV;
 			}
 		}
 	}
+
+	free(si.upper_bound);
 
 	info("nSV = %d, nBSV = %d\n",nSV,nBSV);
 
@@ -1915,18 +2178,21 @@ static void svm_binary_svc_probability(
 		subprob.l = prob->l-(end-begin);
 		subprob.x = Malloc(struct svm_node*,subprob.l);
 		subprob.y = Malloc(double,subprob.l);
+		subprob.W = Malloc(double,subprob.l);
 			
 		k=0;
 		for(j=0;j<begin;j++)
 		{
 			subprob.x[k] = prob->x[perm[j]];
 			subprob.y[k] = prob->y[perm[j]];
+			subprob.W[k] = prob->W[perm[j]];
 			++k;
 		}
 		for(j=end;j<prob->l;j++)
 		{
 			subprob.x[k] = prob->x[perm[j]];
 			subprob.y[k] = prob->y[perm[j]];
+			subprob.W[k] = prob->W[perm[j]];
 			++k;
 		}
 		int p_count=0,n_count=0;
@@ -1969,6 +2235,7 @@ static void svm_binary_svc_probability(
 		}
 		free(subprob.x);
 		free(subprob.y);
+		free(subprob.W);
 	}		
 	sigmoid_train(prob->l,dec_values,prob->y,probA,probB);
 	free(dec_values);
@@ -2068,10 +2335,40 @@ static void svm_group_classes(const svm_problem *prob, int *nr_class_ret, int **
 }
 
 //
+// Remove zero weighed data as libsvm and some liblinear solvers require C > 0.
+//
+static void remove_zero_weight(svm_problem *newprob, const svm_problem *prob) 
+{
+	int i;
+	int l = 0;
+	for(i=0;i<prob->l;i++)
+		if(prob->W[i] > 0) l++;
+	*newprob = *prob;
+	newprob->l = l;
+	newprob->x = Malloc(svm_node*,l);
+	newprob->y = Malloc(double,l);
+	newprob->W = Malloc(double,l);
+
+	int j = 0;
+	for(i=0;i<prob->l;i++)
+		if(prob->W[i] > 0)
+		{
+			newprob->x[j] = prob->x[i];
+			newprob->y[j] = prob->y[i];
+			newprob->W[j] = prob->W[i];
+			j++;
+		}
+}
+
+//
 // Interface functions
 //
 svm_model *svm_train(const svm_problem *prob, const svm_parameter *param)
 {
+	svm_problem newprob;
+	remove_zero_weight(&newprob, prob);
+	prob = &newprob;
+	
 	svm_model *model = Malloc(svm_model,1);
 	model->param = *param;
 	model->free_sv = 0;	// XXX
@@ -2117,6 +2414,129 @@ svm_model *svm_train(const svm_problem *prob, const svm_parameter *param)
 
 		free(f.alpha);
 	}
+	/*added by Macaca referneced from ferng 20111222*/
+	else if(param->svm_type == HINT_SVC)
+	{
+		int l = prob->l;
+		int nr_class;
+		int *label = NULL;
+		int *start = NULL;
+		int *count = NULL;
+		int *perm = Malloc(int,l);
+		int i, p;
+		int nHint = 0;
+
+		svm_group_classes(prob,&nr_class,&label,&start,&count,perm);
+		svm_problem sub_prob;
+		sub_prob.l = prob->l;
+		sub_prob.x = Malloc(svm_node *,sub_prob.l);
+		sub_prob.y = Malloc(double,sub_prob.l);
+		sub_prob.W = Malloc(double,sub_prob.l);
+		for(i = 0; i < l; i++)
+		{
+			sub_prob.x[i] = prob->x[perm[i]];
+			sub_prob.W[i] = prob->W[perm[i]] ;
+		}
+		for(i = 0, p = +1; i < nr_class; ++i)
+		{
+			if(label[i] == 0)
+				for(int j = 0; j < count[i]; ++j)
+					sub_prob.y[start[i]+j] = prob->y[perm[start[i]+j]];
+			else
+			{
+				for(int j = 0; j < count[i]; ++j)
+					sub_prob.y[start[i]+j] = p;
+				p = -p;
+			}
+		}
+		for(i = 0; i < nr_class; ++i)
+			if(label[i] == 0) break;
+		if(i < nr_class)
+		{
+			int hint_start = start[i], hint_count = count[i];
+			--nr_class;
+			while(i < nr_class)
+			{
+				label[i] = label[i+1];
+				start[i] = start[i+1];
+				count[i] = count[i+1];
+				++i;
+			}
+			start[nr_class] = hint_start;
+			count[nr_class] = hint_count;
+			nHint = hint_count;
+		}
+		if(nr_class != 2)
+		{
+			fprintf(stderr, "warning: HINT_SVC can only be used for binary classification\n");
+			nr_class = 2;
+		}
+
+		decision_function f = svm_train_one(&sub_prob, param, param->C, param->C);
+
+		bool *nonzero = Malloc(bool,l);
+		double max_alpha = 0.0;
+		for(i = 0; i < l; ++i)
+		{
+			nonzero[i] = (fabs(f.alpha[i]) > 0) ? true : false;
+			if(fabs(f.alpha[i]) > max_alpha)
+				max_alpha = fabs(f.alpha[i]);
+		}
+		// build output
+		info("max(alpha) = %lg\n", max_alpha);
+
+		model->nr_class = nr_class;
+		model->label = Malloc(int, nr_class);
+		for(i = 0; i < nr_class; ++i)
+			model->label[i] = label[i];
+
+		model->rho = Malloc(double, 1);
+		model->rho[0] = f.rho;
+		model->probA = NULL;
+		model->probB = NULL;
+
+		int total_sv = 0;
+		model->nSV = Malloc(int,nr_class);
+		for(i = 0; i < nr_class; ++i)
+		{
+			model->nSV[i] = 0;
+			for(int j = 0; j < count[i]; ++j)
+				if(nonzero[start[i]+j])
+				{
+					++total_sv;
+					++model->nSV[i];
+				}
+		}
+		// count SV of hints
+		if(nHint > 0)
+		{
+			for(int j = 0; j < count[nr_class]; ++j)
+				if(nonzero[start[nr_class]+j]) ++total_sv;
+			// TODO Do we need to specially save these SVs?
+		}
+		info("Total nSV = %d\n",total_sv);
+
+		model->l = total_sv;
+		model->SV = Malloc(svm_node *,total_sv);
+		model->sv_coef = Malloc(double *,nr_class-1);
+		for(i=0;i<nr_class-1;i++)
+			model->sv_coef[i] = Malloc(double,total_sv);
+		for(p = i = 0; i < l; ++i)
+			if(nonzero[i])
+			{
+				model->SV[p] = sub_prob.x[i];
+				model->sv_coef[0][p++] = f.alpha[i];
+			}
+		free(sub_prob.x);
+		free(sub_prob.y);
+		free(start);
+		free(count);
+		free(perm);
+		free(label);
+		free(nonzero);
+		free(f.alpha);
+	}
+	/*added by Macaca referneced from ferng 20111222*/
 	else
 	{
 		// classification
@@ -2133,9 +2553,15 @@ svm_model *svm_train(const svm_problem *prob, const svm_parameter *param)
 			info("WARNING: training data in only one class. See README for details.\n");
 		
 		svm_node **x = Malloc(svm_node *,l);
+		double *W;
+		W = Malloc(double,l);
+
 		int i;
 		for(i=0;i<l;i++)
+		{
 			x[i] = prob->x[perm[i]];
+			W[i] = prob->W[perm[i]];
+		}
 
 		// calculate weighted C
 
@@ -2178,16 +2604,19 @@ svm_model *svm_train(const svm_problem *prob, const svm_parameter *param)
 				sub_prob.l = ci+cj;
 				sub_prob.x = Malloc(svm_node *,sub_prob.l);
 				sub_prob.y = Malloc(double,sub_prob.l);
+				sub_prob.W = Malloc(double,sub_prob.l);
 				int k;
 				for(k=0;k<ci;k++)
 				{
 					sub_prob.x[k] = x[si+k];
 					sub_prob.y[k] = +1;
+					sub_prob.W[k] = W[si+k];
 				}
 				for(k=0;k<cj;k++)
 				{
 					sub_prob.x[ci+k] = x[sj+k];
 					sub_prob.y[ci+k] = -1;
+					sub_prob.W[ci+k] = W[sj+k];
 				}
 
 				if(param->probability)
@@ -2202,6 +2631,7 @@ svm_model *svm_train(const svm_problem *prob, const svm_parameter *param)
 						nonzero[sj+k] = true;
 				free(sub_prob.x);
 				free(sub_prob.y);
+				free(sub_prob.W);
 				++p;
 			}
 
@@ -2297,6 +2727,7 @@ svm_model *svm_train(const svm_problem *prob, const svm_parameter *param)
 		free(count);
 		free(perm);
 		free(start);
+		free(W);
 		free(x);
 		free(weighted_C);
 		free(nonzero);
@@ -2306,6 +2737,9 @@ svm_model *svm_train(const svm_problem *prob, const svm_parameter *param)
 		free(nz_count);
 		free(nz_start);
 	}
+	free(newprob.x);
+	free(newprob.y);
+	free(newprob.W);
 	return model;
 }
 
@@ -2369,6 +2803,74 @@ void svm_cross_validation(const svm_problem *prob, const svm_parameter *param, i
 		free(index);
 		free(fold_count);
 	}
+	/*added by Macaca referenced form ferng 20111222*/
+	else if(param->svm_type == HINT_SVC && nr_fold < l)
+	{
+		int *start = NULL;
+		int *label = NULL;
+		int *count = NULL;
+		svm_group_classes(prob,&nr_class,&label,&start,&count,perm);
+		for(i = 0; i < nr_class; ++i)
+			if(label[i] == 0) break;
+		if(i < nr_class)
+		{
+			int hint_start = start[i], hint_count = count[i];
+			//int hintClass = i;
+			--nr_class;
+			while(i < nr_class)
+			{
+				label[i] = label[i+1];
+				start[i] = start[i+1];
+				count[i] = count[i+1];
+				++i;
+			}
+			start[nr_class] = hint_start;
+			count[nr_class] = hint_count;
+			//nHint = hint_count;
+		}
+
+		// random shuffle and then data grouped by fold using the array perm
+		int *fold_count = Malloc(int,nr_fold);
+		int c;
+		int *index = Malloc(int,l);
+		for(i=0;i<l;i++)
+			index[i]=perm[i];
+		for (c=0; c<nr_class; c++) 
+			for(i=0;i<count[c];i++)
+			{
+				int j = i+rand()%(count[c]-i);
+				swap(index[start[c]+j],index[start[c]+i]);
+			}
+		for(i=0;i<nr_fold;i++)
+		{
+			fold_count[i] = 0;
+			for (c=0; c<nr_class;c++)
+				fold_count[i]+=(i+1)*count[c]/nr_fold-i*count[c]/nr_fold;
+		}
+		fold_start[0]=0;
+		for (i=1;i<=nr_fold;i++)
+			fold_start[i] = fold_start[i-1]+fold_count[i-1];
+		for (c=0; c<nr_class;c++)
+			for(i=0;i<nr_fold;i++)
+			{
+				int begin = start[c]+i*count[c]/nr_fold;
+				int end = start[c]+(i+1)*count[c]/nr_fold;
+				for(int j=begin;j<end;j++)
+				{
+					perm[fold_start[i]] = index[j];
+					fold_start[i]++;
+				}
+			}
+		fold_start[0]=0;
+		for (i=1;i<=nr_fold;i++)
+			fold_start[i] = fold_start[i-1]+fold_count[i-1];
+		free(start);	
+		free(label);
+		free(count);	
+		free(index);
+		free(fold_count);
+	}
+	// added by Macaca referenced from ferng 20111222
 	else
 	{
 		for(i=0;i<l;i++) perm[i]=i;
@@ -2392,22 +2894,28 @@ void svm_cross_validation(const svm_problem *prob, const svm_parameter *param, i
 		subprob.x = Malloc(struct svm_node*,subprob.l);
 		subprob.y = Malloc(double,subprob.l);
 			
+		subprob.W = Malloc(double,subprob.l);
 		k=0;
 		for(j=0;j<begin;j++)
 		{
 			subprob.x[k] = prob->x[perm[j]];
 			subprob.y[k] = prob->y[perm[j]];
+			subprob.W[k] = prob->W[perm[j]];
 			++k;
 		}
 		for(j=end;j<l;j++)
 		{
 			subprob.x[k] = prob->x[perm[j]];
 			subprob.y[k] = prob->y[perm[j]];
+			subprob.W[k] = prob->W[perm[j]];
 			++k;
 		}
 		struct svm_model *submodel = svm_train(&subprob,param);
 		if(param->probability && 
-		   (param->svm_type == C_SVC || param->svm_type == NU_SVC))
+	/*modified by Macaca referenced form ferng 20111222*/
+	//	   (param->svm_type == C_SVC || param->svm_type == NU_SVC))
+		   (param->svm_type == C_SVC || param->svm_type == NU_SVC || param->svm_type == HINT_SVC))
+	/*modified by Macaca referenced form ferng 20111222*/
 		{
 			double *prob_estimates=Malloc(double,svm_get_nr_class(submodel));
 			for(j=begin;j<end;j++)
@@ -2420,6 +2928,7 @@ void svm_cross_validation(const svm_problem *prob, const svm_parameter *param, i
 		svm_free_and_destroy_model(&submodel);
 		free(subprob.x);
 		free(subprob.y);
+		free(subprob.W);
 	}		
 	free(fold_start);
 	free(perm);	
@@ -2460,6 +2969,7 @@ double svm_predict_values(const svm_model *model, const svm_node *x, double* dec
 	int i;
 	if(model->param.svm_type == ONE_CLASS ||
 	   model->param.svm_type == EPSILON_SVR ||
+	   model->param.svm_type == HINT_SVC ||		// added by Macaca referenced from ferng 20111208
 	   model->param.svm_type == NU_SVR)
 	{
 		double *sv_coef = model->sv_coef[0];
@@ -2539,6 +3049,15 @@ double svm_predict(const svm_model *model, const svm_node *x)
 	   model->param.svm_type == EPSILON_SVR ||
 	   model->param.svm_type == NU_SVR)
 		dec_values = Malloc(double, 1);
+
+	/*added by Macaca referenced from ferng 20111222*/
+	else if(model->param.svm_type == HINT_SVC)
+	{
+		double res;
+		svm_predict_values(model, x, &res);
+		return model->label[(res>0)?0:1];
+	}
+	/*added by Macaca referenced from ferng 20111222*/
 	else 
 		dec_values = Malloc(double, nr_class*(nr_class-1)/2);
 	double pred_result = svm_predict_values(model, x, dec_values);
@@ -2549,7 +3068,9 @@ double svm_predict(const svm_model *model, const svm_node *x)
 double svm_predict_probability(
 	const svm_model *model, const svm_node *x, double *prob_estimates)
 {
-	if ((model->param.svm_type == C_SVC || model->param.svm_type == NU_SVC) &&
+	/*modeified by Macaca 20120208*/
+	if ((model->param.svm_type == C_SVC || model->param.svm_type == NU_SVC ||  
+	     model->param.svm_type == HINT_SVC ) &&
 	    model->probA!=NULL && model->probB!=NULL)
 	{
 		int i;
@@ -2587,7 +3108,10 @@ double svm_predict_probability(
 
 static const char *svm_type_table[] =
 {
-	"c_svc","nu_svc","one_class","epsilon_svr","nu_svr",NULL
+/*editd by Macaca referenced from ferng 20111208*/
+//	"c_svc","nu_svc","one_class","epsilon_svr","nu_svr",NULL
+	"c_svc","nu_svc","one_class","epsilon_svr","nu_svr","hint_svc",NULL
+/*editd by Macaca referenced from ferng 20111208*/
 };
 
 static const char *kernel_type_table[]=
@@ -2960,6 +3484,7 @@ const char *svm_check_parameter(const svm_problem *prob, const svm_parameter *pa
 	   svm_type != NU_SVC &&
 	   svm_type != ONE_CLASS &&
 	   svm_type != EPSILON_SVR &&
+	   svm_type != HINT_SVC && 	// added by Macaca referneced from fenrg 20111222
 	   svm_type != NU_SVR)
 		return "unknown svm type";
 	
@@ -3024,7 +3549,7 @@ const char *svm_check_parameter(const svm_problem *prob, const svm_parameter *pa
 		int max_nr_class = 16;
 		int nr_class = 0;
 		int *label = Malloc(int,max_nr_class);
-		int *count = Malloc(int,max_nr_class);
+		double *count = Malloc(double,max_nr_class);
 
 		int i;
 		for(i=0;i<l;i++)
@@ -3034,7 +3559,7 @@ const char *svm_check_parameter(const svm_problem *prob, const svm_parameter *pa
 			for(j=0;j<nr_class;j++)
 				if(this_label == label[j])
 				{
-					++count[j];
+					count[j] += prob->W[i];
 					break;
 				}
 			if(j == nr_class)
@@ -3043,20 +3568,20 @@ const char *svm_check_parameter(const svm_problem *prob, const svm_parameter *pa
 				{
 					max_nr_class *= 2;
 					label = (int *)realloc(label,max_nr_class*sizeof(int));
-					count = (int *)realloc(count,max_nr_class*sizeof(int));
+					count = (double *)realloc(count,max_nr_class*sizeof(double));
 				}
 				label[nr_class] = this_label;
-				count[nr_class] = 1;
+				count[nr_class] = prob->W[i];
 				++nr_class;
 			}
 		}
 	
 		for(i=0;i<nr_class;i++)
 		{
-			int n1 = count[i];
+			double n1 = count[i];
 			for(int j=i+1;j<nr_class;j++)
 			{
-				int n2 = count[j];
+				double n2 = count[j];
 				if(param->nu*(n1+n2)/2 > min(n1,n2))
 				{
 					free(label);
@@ -3074,7 +3599,8 @@ const char *svm_check_parameter(const svm_problem *prob, const svm_parameter *pa
 
 int svm_check_probability_model(const svm_model *model)
 {
-	return ((model->param.svm_type == C_SVC || model->param.svm_type == NU_SVC) &&
+	/*modified by Macaca 20120208*/
+	return ((model->param.svm_type == C_SVC || model->param.svm_type == NU_SVC ||model->param.svm_type == HINT_SVC ) &&
 		model->probA!=NULL && model->probB!=NULL) ||
 		((model->param.svm_type == EPSILON_SVR || model->param.svm_type == NU_SVR) &&
 		 model->probA!=NULL);

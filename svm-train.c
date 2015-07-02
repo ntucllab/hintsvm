@@ -19,6 +19,9 @@ void exit_with_help()
 	"	2 -- one-class SVM\n"
 	"	3 -- epsilon-SVR\n"
 	"	4 -- nu-SVR\n"
+	/*added by Macaca 20111222*/
+	"	5 -- hint-SVC\n"
+	/*added by Macaca 20111222*/
 	"-t kernel_type : set type of kernel function (default 2)\n"
 	"	0 -- linear: u'*v\n"
 	"	1 -- polynomial: (gamma*u'*v + coef0)^degree\n"
@@ -38,6 +41,7 @@ void exit_with_help()
 	"-wi weight : set the parameter C of class i to weight*C, for C-SVC (default 1)\n"
 	"-v n: n-fold cross validation mode\n"
 	"-q : quiet mode (no outputs)\n"
+	"-W weight_file: set weight file\n"
 	);
 	exit(1);
 }
@@ -56,6 +60,7 @@ struct svm_parameter param;		// set by parse_command_line
 struct svm_problem prob;		// set by read_problem
 struct svm_model *model;
 struct svm_node *x_space;
+char *weight_file;
 int cross_validation;
 int nr_fold;
 
@@ -148,6 +153,17 @@ void do_cross_validation()
 			((prob.l*sumvv-sumv*sumv)*(prob.l*sumyy-sumy*sumy))
 			);
 	}
+	//added by Macaca referenced from ferng 20111222
+	else if (param.svm_type == HINT_SVC)
+	{
+		int hint = 0;
+		for(i=0;i<prob.l;i++)
+			if(prob.y[i] == 0) ++hint;
+			else if(target[i] == prob.y[i])
+				++total_correct;
+		printf("Cross Validation Accuracy = %g%%\n",100.0*total_correct/(prob.l-hint));
+	}
+	//added by Macaca referenced from ferng 20111222	
 	else
 	{
 		for(i=0;i<prob.l;i++)
@@ -179,6 +195,8 @@ void parse_command_line(int argc, char **argv, char *input_file_name, char *mode
 	param.nr_weight = 0;
 	param.weight_label = NULL;
 	param.weight = NULL;
+	/*Modified by Macaca 20120120*/
+	/*Modified by Macaca 20120120*/
 	cross_validation = 0;
 
 	// parse options
@@ -244,6 +262,9 @@ void parse_command_line(int argc, char **argv, char *input_file_name, char *mode
 				param.weight = (double *)realloc(param.weight,sizeof(double)*param.nr_weight);
 				param.weight_label[param.nr_weight-1] = atoi(&argv[i-1][2]);
 				param.weight[param.nr_weight-1] = atof(argv[i]);
+				break;
+			case 'W':
+				weight_file = argv[i];
 				break;
 			default:
 				fprintf(stderr,"Unknown option: -%c\n", argv[i-1][1]);
@@ -312,6 +333,7 @@ void read_problem(const char *filename)
 
 	prob.y = Malloc(double,prob.l);
 	prob.x = Malloc(struct svm_node *,prob.l);
+	prob.W = Malloc(double,prob.l);
 	x_space = Malloc(struct svm_node,elements);
 
 	max_index = 0;
@@ -328,6 +350,7 @@ void read_problem(const char *filename)
 		prob.y[i] = strtod(label,&endptr);
 		if(endptr == label || *endptr != '\0')
 			exit_input_error(i+1);
+		prob.W[i] = 1;
 
 		while(1)
 		{
@@ -376,4 +399,12 @@ void read_problem(const char *filename)
 		}
 
 	fclose(fp);
+
+	if(weight_file) 
+	{
+		fp = fopen(weight_file,"r");
+		for(i=0;i<prob.l;i++)
+			fscanf(fp,"%lf",&prob.W[i]);
+		fclose(fp);
+	}
 }

@@ -20,9 +20,13 @@ struct svm_problem
 	int l;
 	double *y;
 	struct svm_node **x;
+	double *W; /* instance weight */
 };
 
-enum { C_SVC, NU_SVC, ONE_CLASS, EPSILON_SVR, NU_SVR };	/* svm_type */
+/* edited by Macaca referenced from Macaca 20111222 */
+//enum { C_SVC, NU_SVC, ONE_CLASS, EPSILON_SVR, NU_SVR };	/* svm_type */
+enum { C_SVC, NU_SVC, ONE_CLASS, EPSILON_SVR, NU_SVR, HINT_SVC };	/* svm_type */
+/* edited by Macaca referenced from Macaca 20111222 */
 enum { LINEAR, POLY, RBF, SIGMOID, PRECOMPUTED }; /* kernel_type */
 
 struct svm_parameter

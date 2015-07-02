@@ -74,13 +74,13 @@ def evaluations(ty, pv):
 		SCC = float('nan')
 	return (ACC, MSE, SCC)
 
-def svm_train(arg1, arg2=None, arg3=None):
+def svm_train(arg1, arg2=None, arg3=None, arg4 = None):
 	"""
-	svm_train(y, x [, 'options']) -> model | ACC | MSE 
+	svm_train(W, y, x [, 'options']) -> model | ACC | MSE 
 	svm_train(prob, [, 'options']) -> model | ACC | MSE 
 	svm_train(prob, param) -> model | ACC| MSE 
 
-	Train an SVM model from data (y, x) or an svm_problem prob using
+	Train an SVM model from weighted data (W, y, x) or an svm_problem prob using
 	'options' or an svm_parameter param. 
 	If '-v' is specified in 'options' (i.e., cross validation)
 	either accuracy (ACC) or mean-squared error (MSE) is returned.
@@ -91,6 +91,7 @@ def svm_train(arg1, arg2=None, arg3=None):
 	        2 -- one-class SVM
 	        3 -- epsilon-SVR
 	        4 -- nu-SVR
+		5 -- hint SVM
 	    -t kernel_type : set type of kernel function (default 2)
 	        0 -- linear: u'*v
 	        1 -- polynomial: (gamma*u'*v + coef0)^degree
@@ -114,8 +115,9 @@ def svm_train(arg1, arg2=None, arg3=None):
 	prob, param = None, None
 	if isinstance(arg1, (list, tuple)):
 		assert isinstance(arg2, (list, tuple))
-		y, x, options = arg1, arg2, arg3
-		prob = svm_problem(y, x)
+		assert isinstance(arg3, list)
+		W, y, x, options = arg1, arg2, arg3, arg4
+		prob = svm_problem(W, y, x)
 		param = svm_parameter(options)
 	elif isinstance(arg1, svm_problem):
 		prob = arg1
