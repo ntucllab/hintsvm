@@ -14,7 +14,7 @@ AC_PROG_MAKE_SET
 AC_PROG_CC_STDC
 AC_PROG_RANLIB
 AC_PROG_LIBTOOL
-
+AM_PATH_PYTHON([3])
 if test x"${ac_cv_prog_cc_c99}" = xno; then
     AC_MSG_ERROR([C99 support is required to compile $PACKAGE])
 fi
@@ -35,7 +35,7 @@ AC_FUNC_REALLOC
 AC_FUNC_STRTOD
 AC_CHECK_FUNCS([sqrt strrchr strtol])
 
-AM_PATH_PYTHON([3])
+AM_SILENT_RULES([yes])
 
 AC_CONFIG_FILES([Makefile])
 AC_OUTPUT
