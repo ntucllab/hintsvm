@@ -21,3 +21,7 @@ Example:
 ```
 
 For now only the python wrapper are supported.
+
+For more information about python wrapper, please visit:
+
+https://github.com/yangarbiter/hintsvm/tree/master/python
