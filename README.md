@@ -12,11 +12,12 @@ There are two parameters added to the original libsvm:
 2. '-W weight file'.
 
 Usage:
-	Use '-W weight_file' to assign weights for each instance which is used
-    to adjust the weight of labeled and unlabeled instances.
-	Please make sure all weights are non-negative.
+- Use '-W weight_file' to assign weights for each instance which is used to adjust the weight between labeled and unlabeled instances.
+- Please make sure all weights are non-negative.
 
 Example:
-	./svm-train -W heart_scale.wgt  heart_scale
+```
+./svm-train -W heart_scale.wgt  heart_scale
+```
 
 For now only the python wrapper are supported.
