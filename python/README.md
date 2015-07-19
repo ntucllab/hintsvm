@@ -14,6 +14,8 @@ USAGE
 The usage is bascally the same as the version without supporting
 instance weights. We only show differences below.
 
+- ```import hintsvm, hintsvmutil``` instead of original ```import svm, svmutil```
+
 - Function: svm_train
 
     There are three ways to call svm_train()
