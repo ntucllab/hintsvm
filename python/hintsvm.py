@@ -5,23 +5,18 @@ from ctypes.util import find_library
 import sys
 import os
 
-#modify by Macaca 2013/10/9
 # For unix the prefix 'lib' is not considered.
-#if find_library('svm'):
-#	libsvm = CDLL(find_library('svm'))
-#elif find_library('libsvm'):
-#	libsvm = CDLL(find_library('libsvm'))
-#else:
-#	if sys.platform == 'win32':
-#		libsvm = CDLL(os.path.join(os.path.dirname(__file__),\
-#				'../windows/libsvm.dll'))
-#	else:
-#		libsvm = CDLL(os.path.join(os.path.dirname(__file__),\
-#				'../libsvm.so.2'))
-
-#copy svm.py and svmutil.py to the working directory and change the following path
-libsvm = CDLL( './libsvm/libsvm.so.2' )
-#modify by Macaca 2013/10/9
+if find_library('hintsvm'):
+	libsvm = CDLL(find_library('hintsvm'))
+elif find_library('libhintsvm'):
+	libsvm = CDLL(find_library('libhintsvm'))
+else:
+	if sys.platform == 'win32':
+		libsvm = CDLL(os.path.join(os.path.dirname(__file__),\
+				'../windows/libhintsvm.dll'))
+	else:
+		libsvm = CDLL(os.path.join(os.path.dirname(__file__),\
+				'../libhintsvm.so.2'))
 
 # Construct constants
 #modify by Macaca 2013/10/9
