@@ -2,38 +2,54 @@
 
 from ctypes import *
 from ctypes.util import find_library
+from os import path
 import sys
-import os
 
-# For unix the prefix 'lib' is not considered.
-if find_library('hintsvm'):
-	libsvm = CDLL(find_library('hintsvm'))
-elif find_library('libhintsvm'):
-	libsvm = CDLL(find_library('libhintsvm'))
-else:
+if sys.version_info[0] >= 3:
+	xrange = range
+
+__all__ = ['libsvm', 'svm_problem', 'svm_parameter',
+           'toPyModel', 'gen_svm_nodearray', 'print_null', 'svm_node', 'C_SVC',
+           'EPSILON_SVR', 'LINEAR', 'NU_SVC', 'NU_SVR', 'ONE_CLASS',
+           'POLY', 'PRECOMPUTED', 'PRINT_STRING_FUN', 'RBF',
+           'SIGMOID', 'c_double', 'svm_model']
+
+try:
+	dirname = path.dirname(path.abspath(__file__))
 	if sys.platform == 'win32':
-		libsvm = CDLL(os.path.join(os.path.dirname(__file__),\
-				'../windows/libhintsvm.dll'))
+		libsvm = CDLL(path.join(dirname, r'..\windows\libsvm.dll'))
 	else:
-		libsvm = CDLL(os.path.join(os.path.dirname(__file__),\
-				'../libhintsvm.so.2'))
+		libsvm = CDLL(path.join(dirname, '../libhintsvm.so.2'))
+except:
+# For unix the prefix 'lib' is not considered.
+	if find_library('svm'):
+		libsvm = CDLL(find_library('svm'))
+	elif find_library('libsvm'):
+		libsvm = CDLL(find_library('libsvm'))
+	else:
+		raise Exception('LIBSVM library not found.')
 
-# Construct constants
-#modify by Macaca 2013/10/9
-SVM_TYPE = ['C_SVC', 'NU_SVC', 'ONE_CLASS', 'EPSILON_SVR', 'NU_SVR', 'HINT_SVC' ]
-#modify by Macaca 2013/10/9
-KERNEL_TYPE = ['LINEAR', 'POLY', 'RBF', 'SIGMOID', 'PRECOMPUTED']
-for i, s in enumerate(SVM_TYPE): exec("%s = %d" % (s , i))
-for i, s in enumerate(KERNEL_TYPE): exec("%s = %d" % (s , i))
+C_SVC = 0
+NU_SVC = 1
+ONE_CLASS = 2
+EPSILON_SVR = 3
+NU_SVR = 4
+HINT_SVC = 5
+
+LINEAR = 0
+POLY = 1
+RBF = 2
+SIGMOID = 3
+PRECOMPUTED = 4
 
 PRINT_STRING_FUN = CFUNCTYPE(None, c_char_p)
-def print_null(s): 
-	return 
+def print_null(s):
+	return
 
-def genFields(names, types): 
+def genFields(names, types):
 	return list(zip(names, types))
 
-def fillprototype(f, restype, argtypes): 
+def fillprototype(f, restype, argtypes):
 	f.restype = restype
 	f.argtypes = argtypes
 
@@ -42,10 +58,15 @@ class svm_node(Structure):
 	_types = [c_int, c_double]
 	_fields_ = genFields(_names, _types)
 
-def gen_svm_nodearray(xi, feature_max=None, issparse=None):
+	def __str__(self):
+		return '%d:%g' % (self.index, self.value)
+
+def gen_svm_nodearray(xi, feature_max=None, isKernel=None):
 	if isinstance(xi, dict):
 		index_range = xi.keys()
 	elif isinstance(xi, (list, tuple)):
+		if not isKernel:
+			xi = [0] + xi  # idx should start from 1
 		index_range = range(len(xi))
 	else:
 		raise TypeError('xi should be a dictionary, list or tuple')
@@ -53,7 +74,7 @@ def gen_svm_nodearray(xi, feature_max=None, issparse=None):
 	if feature_max:
 		assert(isinstance(feature_max, int))
 		index_range = filter(lambda j: j <= feature_max, index_range)
-	if issparse: 
+	if not isKernel:
 		index_range = filter(lambda j:xi[j] != 0, index_range)
 
 	index_range = sorted(index_range)
@@ -63,7 +84,7 @@ def gen_svm_nodearray(xi, feature_max=None, issparse=None):
 		ret[idx].index = j
 		ret[idx].value = xi[j]
 	max_idx = 0
-	if index_range: 
+	if index_range:
 		max_idx = index_range[-1]
 	return ret, max_idx
 
@@ -72,7 +93,7 @@ class svm_problem(Structure):
 	_types = [c_int, POINTER(c_double), POINTER(POINTER(svm_node)), POINTER(c_double)]
 	_fields_ = genFields(_names, _types)
 
-	def __init__(self, W, y, x):
+	def __init__(self, W, y, x, isKernel=None):
 		if len(y) != len(x):
 			raise ValueError("len(y) != len(x)")
 		if len(W) != 0 and len(W) != len(x):
@@ -84,7 +105,7 @@ class svm_problem(Structure):
 		max_idx = 0
 		x_space = self.x_space = []
 		for i, xi in enumerate(x):
-			tmp_xi, tmp_idx = gen_svm_nodearray(xi)
+			tmp_xi, tmp_idx = gen_svm_nodearray(xi,isKernel=isKernel)
 			x_space += [tmp_xi]
 			max_idx = max(max_idx, tmp_idx)
 		self.n = max_idx
@@ -95,14 +116,14 @@ class svm_problem(Structure):
 		self.y = (c_double * l)()
 		for i, yi in enumerate(y): self.y[i] = yi
 
-		self.x = (POINTER(svm_node) * l)() 
+		self.x = (POINTER(svm_node) * l)()
 		for i, xi in enumerate(self.x_space): self.x[i] = xi
 
 class svm_parameter(Structure):
 	_names = ["svm_type", "kernel_type", "degree", "gamma", "coef0",
-			"cache_size", "eps", "C", "nr_weight", "weight_label", "weight", 
+			"cache_size", "eps", "C", "nr_weight", "weight_label", "weight",
 			"nu", "p", "shrinking", "probability"]
-	_types = [c_int, c_int, c_int, c_double, c_double, 
+	_types = [c_int, c_int, c_int, c_double, c_double,
 			c_double, c_double, c_double, c_int, POINTER(c_int), POINTER(c_double),
 			c_double, c_double, c_int, c_int]
 	_fields_ = genFields(_names, _types)
@@ -112,11 +133,15 @@ class svm_parameter(Structure):
 			options = ''
 		self.parse_options(options)
 
-	def show(self):
-		attrs = svm_parameter._names + self.__dict__.keys()
-		values = map(lambda attr: getattr(self, attr), attrs) 
+	def __str__(self):
+		s = ''
+		attrs = svm_parameter._names + list(self.__dict__.keys())
+		values = map(lambda attr: getattr(self, attr), attrs)
 		for attr, val in zip(attrs, values):
-			print(' %s: %s' % (attr, val))
+			s += (' %s: %s\n' % (attr, val))
+		s = s.strip()
+
+		return s
 
 	def set_to_default_values(self):
 		self.svm_type = C_SVC;
@@ -132,14 +157,19 @@ class svm_parameter(Structure):
 		self.shrinking = 1
 		self.probability = 0
 		self.nr_weight = 0
-		self.weight_label = (c_int*0)()
-		self.weight = (c_double*0)()
+		self.weight_label = None
+		self.weight = None
 		self.cross_validation = False
 		self.nr_fold = 0
-		self.print_func = None
+		self.print_func = cast(None, PRINT_STRING_FUN)
 
 	def parse_options(self, options):
-		argv = options.split()
+		if isinstance(options, list):
+			argv = options
+		elif isinstance(options, str):
+			argv = options.split()
+		else:
+			raise TypeError("arg 1 should be a list or a str.")
 		self.set_to_default_values()
 		self.print_func = cast(None, PRINT_STRING_FUN)
 		weight_label = []
@@ -194,7 +224,6 @@ class svm_parameter(Structure):
 			elif argv[i].startswith("-w"):
 				i = i + 1
 				self.nr_weight += 1
-				nr_weight = self.nr_weight
 				weight_label += [int(argv[i-1][2:])]
 				weight += [float(argv[i])]
 			else:
@@ -204,17 +233,17 @@ class svm_parameter(Structure):
 		libsvm.svm_set_print_string_function(self.print_func)
 		self.weight_label = (c_int*self.nr_weight)()
 		self.weight = (c_double*self.nr_weight)()
-		for i in range(self.nr_weight): 
+		for i in range(self.nr_weight):
 			self.weight[i] = weight[i]
 			self.weight_label[i] = weight_label[i]
 
 class svm_model(Structure):
 	_names = ['param', 'nr_class', 'l', 'SV', 'sv_coef', 'rho',
-			'probA', 'probB', 'label', 'nSV', 'free_sv']
+			'probA', 'probB', 'sv_indices', 'label', 'nSV', 'free_sv']
 	_types = [svm_parameter, c_int, c_int, POINTER(POINTER(svm_node)),
 			POINTER(POINTER(c_double)), POINTER(c_double),
 			POINTER(c_double), POINTER(c_double), POINTER(c_int),
-			POINTER(c_int), c_int]
+			POINTER(c_int), POINTER(c_int), c_int]
 	_fields_ = genFields(_names, _types)
 
 	def __init__(self):
@@ -240,6 +269,15 @@ class svm_model(Structure):
 		libsvm.svm_get_labels(self, labels)
 		return labels[:nr_class]
 
+	def get_sv_indices(self):
+		total_sv = self.get_nr_sv()
+		sv_indices = (c_int * total_sv)()
+		libsvm.svm_get_sv_indices(self, sv_indices)
+		return sv_indices[:total_sv]
+
+	def get_nr_sv(self):
+		return libsvm.svm_get_nr_sv(self)
+
 	def is_probability_model(self):
 		return (libsvm.svm_check_probability_model(self) == 1)
 
@@ -251,7 +289,7 @@ class svm_model(Structure):
 		result = []
 		for sparse_sv in self.SV[:self.l]:
 			row = dict()
-			
+
 			i = 0
 			while True:
 				row[sparse_sv[i].index] = sparse_sv[i].value
@@ -283,6 +321,8 @@ fillprototype(libsvm.svm_load_model, POINTER(svm_model), [c_char_p])
 fillprototype(libsvm.svm_get_svm_type, c_int, [POINTER(svm_model)])
 fillprototype(libsvm.svm_get_nr_class, c_int, [POINTER(svm_model)])
 fillprototype(libsvm.svm_get_labels, None, [POINTER(svm_model), POINTER(c_int)])
+fillprototype(libsvm.svm_get_sv_indices, None, [POINTER(svm_model), POINTER(c_int)])
+fillprototype(libsvm.svm_get_nr_sv, c_int, [POINTER(svm_model)])
 fillprototype(libsvm.svm_get_svr_probability, c_double, [POINTER(svm_model)])
 
 fillprototype(libsvm.svm_predict_values, c_double, [POINTER(svm_model), POINTER(svm_node), POINTER(c_double)])
