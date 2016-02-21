@@ -8,7 +8,7 @@ import sys
 __all__ = ['libsvm', 'svm_problem', 'svm_parameter',
            'toPyModel', 'gen_svm_nodearray', 'print_null', 'svm_node', 'C_SVC',
            'EPSILON_SVR', 'LINEAR', 'NU_SVC', 'NU_SVR', 'ONE_CLASS',
-           'POLY', 'PRECOMPUTED', 'PRINT_STRING_FUN', 'RBF',
+           'HINTSVM_SVC', 'POLY', 'PRECOMPUTED', 'PRINT_STRING_FUN', 'RBF',
            'SIGMOID', 'c_double', 'svm_model']
 
 try:
@@ -31,6 +31,7 @@ NU_SVC = 1
 ONE_CLASS = 2
 EPSILON_SVR = 3
 NU_SVR = 4
+HINTSVM_SVC = 5
 
 LINEAR = 0
 POLY = 1
