@@ -1925,6 +1925,7 @@ static decision_function svm_train_one(
 		case HINT_SVC:
 			/***put 1 to reduce the complexity***/
 			/***reallocate new si2 in solve_hint_svc***/
+			si.upper_bound = NULL;
 			solve_hint_svc(prob, param, alpha, &si);
 			break;
 		/*added by Macaca referenced from ferng 20111222*/
@@ -2515,6 +2516,7 @@ svm_model *svm_train(const svm_problem *prob, const svm_parameter *param)
 		model->rho[0] = f.rho;
 		model->probA = NULL;
 		model->probB = NULL;
+        model->sv_indices = NULL;
 
 		int total_sv = 0;
 		model->nSV = Malloc(int,nr_class);
